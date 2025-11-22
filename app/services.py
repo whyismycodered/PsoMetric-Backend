@@ -20,7 +20,6 @@ class AIEngine:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"⚙️ AI Engine initializing on: {self.device}")
 
-        # Transform pipeline for EfficientNet
         self.judge_transform = transforms.Compose([
             transforms.Resize((224, 224)),
             transforms.ToTensor(),
@@ -28,9 +27,8 @@ class AIEngine:
         ])
 
     def load_models(self):
-        """Loads YOLO and EfficientNet into memory."""
         if not os.path.exists(SNIPER_PATH) or not os.path.exists(JUDGE_PATH):
-            print("❌ CRITICAL: Models not found in /models folder!")
+            print("❌ CRITICAL: Models not found!")
             return
 
         print("⏳ Loading Sniper...")
@@ -39,7 +37,7 @@ class AIEngine:
         print("⏳ Loading Judge...")
         try:
             self.judge = models.efficientnet_b0(weights=None)
-            self.judge.classifier[1] = nn.Linear(1280, 3) # Mild, Mod, Severe
+            self.judge.classifier[1] = nn.Linear(1280, 3) 
             
             state_dict = torch.load(JUDGE_PATH, map_location=self.device)
             self.judge.load_state_dict(state_dict)
@@ -50,7 +48,6 @@ class AIEngine:
             print(f"❌ Error loading Judge: {e}")
 
     def image_to_base64(self, numpy_image):
-        """Converts a numpy/OpenCV image to a Base64 string."""
         rgb_img = cv2.cvtColor(numpy_image, cv2.COLOR_BGR2RGB)
         pil_img = Image.fromarray(rgb_img)
         buffer = io.BytesIO()
@@ -58,51 +55,80 @@ class AIEngine:
         buffer.seek(0)
         return base64.b64encode(buffer.getvalue()).decode('utf-8')
 
+    def white_balance(self, cv_img):
+        result = cv_img.copy()
+        b, g, r = cv2.split(result)
+        b_mean, g_mean, r_mean = np.mean(b), np.mean(g), np.mean(r)
+        
+        if b_mean == 0 or g_mean == 0 or r_mean == 0: return cv_img
+
+        k = (b_mean + g_mean + r_mean) / 3
+        b = np.clip(b * (k / b_mean), 0, 255).astype(np.uint8)
+        g = np.clip(g * (k / g_mean), 0, 255).astype(np.uint8)
+        r = np.clip(r * (k / r_mean), 0, 255).astype(np.uint8)
+        return cv2.merge((b, g, r))
+
     def calculate_lesion_metrics(self, pil_crop):
-        """
-        Hybrid Grading: AI Baseline + OpenCV Tweaks
-        Returns dictionary with E, I, D scores (0-4) and Global Score (0-10).
-        """
-        # 1. AI BASELINE (General Severity 0-4)
+        """Hybrid Grading with Minimum Floor"""
+        
+        # 1. AI BASELINE
         img_tensor = self.judge_transform(pil_crop).unsqueeze(0).to(self.device)
         with torch.no_grad():
             logits = self.judge(img_tensor)
             probs = torch.nn.functional.softmax(logits, dim=1)
-            p_mild, p_mod, p_sev = probs[0]
             
-            # Weighted Average: Mild=1, Mod=2.5, Sev=4
-            ai_base = (p_mild * 1.0) + (p_mod * 2.5) + (p_sev * 4.0)
+            # WINNER TAKES ALL STRATEGY
+            dominant_class = torch.argmax(probs).item()
+
+            if dominant_class == 0:   # Mild
+                ai_base = 1.0
+                is_mild_anchor = True
+            elif dominant_class == 1: # Mod
+                ai_base = 2.5
+                is_mild_anchor = False
+            else:                     # Sev
+                ai_base = 4.0
+                is_mild_anchor = False
 
         # 2. OPENCV TWEAKS
         cv_img = cv2.cvtColor(np.array(pil_crop), cv2.COLOR_RGB2BGR)
+        cv_img = self.white_balance(cv_img)
         
-        # --- A. Erythema (Redness) ---
+        # Erythema
         b, g, r = cv2.split(cv_img)
         avg_red, avg_green = np.mean(r), np.mean(g)
+        e_score = ai_base
         
-        e_score = ai_base.item()
-        if avg_red > (avg_green * 1.3): e_score += 1.0    # Deep Red
-        elif avg_red > (avg_green * 1.1): e_score += 0.5  # Pink
-
-        # --- B. Desquamation (Scaling) ---
+        if is_mild_anchor:
+            if avg_red > (avg_green * 1.6): e_score += 1.0
+        else:
+            if avg_red > (avg_green * 1.4): e_score += 1.0
+            elif avg_red > (avg_green * 1.2): e_score += 0.5
+        
+        # Scaling
         hsv = cv2.cvtColor(cv_img, cv2.COLOR_BGR2HSV)
-        s = hsv[:, :, 1] # Saturation
-        white_ratio = np.sum(s < 50) / s.size
+        s = hsv[:, :, 1] 
+        white_ratio = np.sum(s < 40) / s.size
+        d_score = ai_base
         
-        d_score = ai_base.item()
-        if white_ratio > 0.30: d_score += 1.0   # Heavy Scale
-        elif white_ratio > 0.10: d_score += 0.5 # Moderate Scale
-        
-        # --- C. Induration (Thickness) ---
-        # Relies mostly on AI shadow detection
-        i_score = ai_base.item()
+        if is_mild_anchor:
+            if white_ratio > 0.35: d_score += 1.0
+        else:
+            if white_ratio > 0.25: d_score += 1.0
+            elif white_ratio > 0.10: d_score += 0.5
 
-        # 3. FINAL CLAMP & FORMAT
-        final_e = int(round(min(max(e_score, 0), 4)))
-        final_i = int(round(min(max(i_score, 0), 4)))
-        final_d = int(round(min(max(d_score, 0), 4)))
+        i_score = ai_base # Induration relies on AI base
+
+        # 3. SAFEGUARD: Ensure scores don't drop to 0 if AI saw something
+        # If AI detected a lesion, the minimum PASI score for any symptom is usually 1
+        # unless it's completely absent. But for "Mild Psoriasis", Induration/Redness 
+        # is rarely 0.
         
-        # Convert 0-4 scale to 0-10 scale for the Global Score
+        final_e = int(round(min(max(e_score, 1), 4))) # Floor of 1
+        final_i = int(round(min(max(i_score, 1), 4))) # Floor of 1
+        final_d = int(round(min(max(d_score, 0), 4))) # Scale can be 0 (smooth)
+        
+        # Global Score Calculation
         global_0_10 = ((final_e + final_i + final_d) / 12.0) * 10.0
         
         return {
@@ -113,23 +139,19 @@ class AIEngine:
         }
 
     def analyze_image(self, original_image: Image.Image):
-        """Main Pipeline: Detect -> Crop -> Grade -> Average"""
-        
-        # Fix EXIF Rotation
         original_image = ImageOps.exif_transpose(original_image)
 
-        # 1. Run Sniper
-        results = self.sniper(original_image, verbose=False)
+        # 🔍 FIX 1: LOWER CONFIDENCE THRESHOLD
+        # conf=0.10 means "If you are even 10% sure it's a lesion, detect it."
+        # This is crucial for Mild psoriasis which is faint.
+        results = self.sniper(original_image, verbose=False, conf=0.10)
         result = results[0]
         
-        # --- GENERATE VISUALIZATION ---
-        # Note: result.plot() returns a numpy array of the image with masks drawn
         annotated_numpy = result.plot() 
         b64_string = self.image_to_base64(annotated_numpy)
-        # ------------------------------
 
-        # Handle Clear Skin
         if not result.masks:
+            # If we STILL find nothing, it really is clear skin.
             return {
                 "diagnosis": "Clear",
                 "global_score": 0.0,
@@ -142,29 +164,23 @@ class AIEngine:
         weighted_score_sum = 0
         lesions_data = []
 
-        # 2. Loop Lesions
         for i, box in enumerate(result.boxes.xyxy):
             x1, y1, x2, y2 = map(int, box.tolist())
-            
-            # Sanity Check Crop
             w, h = original_image.size
             x1, y1, x2, y2 = max(0, x1), max(0, y1), min(w, x2), min(h, y2)
-            area = (x2 - x1) * (y2 - y1)
             
-            if area < 50: continue # Ignore noise
+            # Relax area filter for mild spots (allow smaller spots)
+            area = (x2 - x1) * (y2 - y1)
+            if area < 20: continue 
 
-            # Crop & Grade
             crop = original_image.crop((x1, y1, x2, y2))
             metrics = self.calculate_lesion_metrics(crop)
-            
             score = metrics["severity_score"]
             
-            # Add to weighted sum
             weighted_score_sum += (score * area)
             total_area += area
             
-            # Local Diagnosis
-            local_diag = "Mild" if score < 3 else "Moderate" if score < 7 else "Severe"
+            local_diag = "Mild" if score < 4.0 else "Moderate" if score < 7.5 else "Severe"
 
             lesions_data.append({
                 "id": i + 1,
@@ -176,14 +192,14 @@ class AIEngine:
                 "desquamation": metrics["desquamation"]
             })
 
-        # 3. Final Aggregate
         if total_area > 0:
             global_score = weighted_score_sum / total_area
         else:
             global_score = 0
 
-        if global_score < 3.0: status = "Mild"
-        elif global_score < 7.0: status = "Moderate"
+        # Widen Mild Range
+        if global_score < 4.0: status = "Mild"
+        elif global_score < 7.5: status = "Moderate"
         else: status = "Severe"
 
         return {
@@ -194,5 +210,4 @@ class AIEngine:
             "details": lesions_data
         }
 
-# Singleton
 ai_engine = AIEngine()
