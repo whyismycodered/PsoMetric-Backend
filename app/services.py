@@ -6,6 +6,8 @@ from PIL import Image, ImageOps
 import numpy as np
 import cv2
 import os
+import base64
+import io
 
 # Configuration
 SNIPER_PATH = "models/sniper.pt"
@@ -47,6 +49,15 @@ class AIEngine:
         except Exception as e:
             print(f"❌ Error loading Judge: {e}")
 
+    def image_to_base64(self, numpy_image):
+        """Converts a numpy/OpenCV image to a Base64 string."""
+        rgb_img = cv2.cvtColor(numpy_image, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(rgb_img)
+        buffer = io.BytesIO()
+        pil_img.save(buffer, format="JPEG", quality=70) 
+        buffer.seek(0)
+        return base64.b64encode(buffer.getvalue()).decode('utf-8')
+
     def calculate_lesion_metrics(self, pil_crop):
         """
         Hybrid Grading: AI Baseline + OpenCV Tweaks
@@ -63,7 +74,6 @@ class AIEngine:
             ai_base = (p_mild * 1.0) + (p_mod * 2.5) + (p_sev * 4.0)
 
         # 2. OPENCV TWEAKS
-        # Convert PIL (RGB) to OpenCV (BGR)
         cv_img = cv2.cvtColor(np.array(pil_crop), cv2.COLOR_RGB2BGR)
         
         # --- A. Erythema (Redness) ---
@@ -75,11 +85,8 @@ class AIEngine:
         elif avg_red > (avg_green * 1.1): e_score += 0.5  # Pink
 
         # --- B. Desquamation (Scaling) ---
-        # Convert to HSV to find white/desaturated areas
         hsv = cv2.cvtColor(cv_img, cv2.COLOR_BGR2HSV)
-        s = hsv[:, :, 1] # Saturation channel
-        
-        # Calculate ratio of low-saturation pixels (White/Silver scale)
+        s = hsv[:, :, 1] # Saturation
         white_ratio = np.sum(s < 50) / s.size
         
         d_score = ai_base.item()
@@ -96,7 +103,6 @@ class AIEngine:
         final_d = int(round(min(max(d_score, 0), 4)))
         
         # Convert 0-4 scale to 0-10 scale for the Global Score
-        # (Sum of symptoms / Max possible sum) * 10
         global_0_10 = ((final_e + final_i + final_d) / 12.0) * 10.0
         
         return {
@@ -109,12 +115,18 @@ class AIEngine:
     def analyze_image(self, original_image: Image.Image):
         """Main Pipeline: Detect -> Crop -> Grade -> Average"""
         
-        # Fix EXIF Rotation (Crucial for mobile uploads)
+        # Fix EXIF Rotation
         original_image = ImageOps.exif_transpose(original_image)
 
         # 1. Run Sniper
         results = self.sniper(original_image, verbose=False)
         result = results[0]
+        
+        # --- GENERATE VISUALIZATION ---
+        # Note: result.plot() returns a numpy array of the image with masks drawn
+        annotated_numpy = result.plot() 
+        b64_string = self.image_to_base64(annotated_numpy)
+        # ------------------------------
 
         # Handle Clear Skin
         if not result.masks:
@@ -122,6 +134,7 @@ class AIEngine:
                 "diagnosis": "Clear",
                 "global_score": 0.0,
                 "lesions_found": 0,
+                "annotated_image_base64": b64_string,
                 "details": []
             }
 
@@ -177,6 +190,7 @@ class AIEngine:
             "diagnosis": status,
             "global_score": round(global_score, 2),
             "lesions_found": len(lesions_data),
+            "annotated_image_base64": b64_string,
             "details": lesions_data
         }
 

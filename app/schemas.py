@@ -4,19 +4,19 @@ from typing import List, Optional
 # Detail for a single lesion found in the image
 class LesionDetail(BaseModel):
     id: int
-    diagnosis: str          # Mild/Mod/Severe
-    severity_score: float   # The 0-10 Global Score (for sorting/color coding)
+    diagnosis: str          # Mild, Moderate, Severe
+    severity_score: float   # Global score 0-10 (for sorting)
     area_pixels: int
     
-    # --- NEW MEDICAL METRICS (PASI Sub-scores 0-4) ---
+    # --- PASI METRICS (0-4 Scale) ---
     erythema: int           # Redness
     induration: int         # Thickness
     desquamation: int       # Scaling
 
 # The Main Response Object
 class PsoriasisAnalysisResponse(BaseModel):
-    diagnosis: str
-    global_score: float
+    diagnosis: str          # Global Diagnosis
+    global_score: float     # Weighted Average 0-10
     lesions_found: int
-    processed_image_url: Optional[str] = None
+    annotated_image_base64: Optional[str] = None # The "Heatmap" Image
     details: List[LesionDetail]
