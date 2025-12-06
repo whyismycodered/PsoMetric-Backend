@@ -104,59 +104,195 @@ class AIEngine:
 
         # --- A. Erythema (Redness) ---
         b, g, r = cv2.split(cv_img)
+        hsv = cv2.cvtColor(cv_img, cv2.COLOR_BGR2HSV)
+        
+        # Calculate redness metrics within lesion area
         avg_red = cv2.mean(r, mask=lesion_mask)[0]
         avg_green = cv2.mean(g, mask=lesion_mask)[0]
+        avg_blue = cv2.mean(b, mask=lesion_mask)[0]
+        avg_saturation = cv2.mean(hsv[:, :, 1], mask=lesion_mask)[0]
         
+        # Red dominance ratio (how much redder than green/blue)
         red_ratio = avg_red / (avg_green + 1e-5)
+        red_purity = avg_red / (avg_red + avg_green + avg_blue + 1e-5)
+        
+        # Start with AI baseline
         e_score = ai_base.item()
         
-        # Visual Veto: Redness
-        if red_ratio < 1.1: e_score = min(e_score, 1.0)
-        elif red_ratio < 1.25: e_score = min(e_score, 2.0)
-        elif red_ratio > 1.5: e_score += 0.5
+        # Multi-factor redness assessment
+        if red_ratio < 1.05 or red_purity < 0.35:
+            # Very minimal redness - likely clear or very mild
+            e_score = min(e_score, 1.0)
+        elif red_ratio < 1.15 or red_purity < 0.38:
+            # Mild redness with low saturation
+            e_score = min(e_score, 2.0)
+        elif red_ratio > 1.4 and avg_saturation > 80:
+            # Intense, saturated redness - upgrade severity
+            e_score = max(e_score, 3.0)
+            if red_ratio > 1.6:
+                e_score += 0.5
+        elif red_ratio > 1.3:
+            # Moderate-high redness
+            e_score += 0.3
+        
+        # Prevent unrealistic scores
+        e_score = max(1.0, min(4.0, e_score))
 
         # --- B. Desquamation (Scaling) ---
-        # FIX: Distinguish Scale (Rough) from Glare (Smooth)
-        hsv = cv2.cvtColor(cv_img, cv2.COLOR_BGR2HSV)
-        s = hsv[:, :, 1] # Saturation
-        v = hsv[:, :, 2] # Value (Brightness)
-        
-        # 1. Find Candidate White Pixels (Low Saturation + High Brightness)
-        # We increase strictness: Saturation must be VERY low (< 30)
-        white_candidates = (s < 30) & (v > 100) & (lesion_mask > 0)
-        
-        # 2. TEXTURE CHECK (The Glare Filter)
+        # Enhanced texture analysis to distinguish scale from glare
         gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
+        s = hsv[:, :, 1]  # Saturation
+        v = hsv[:, :, 2]  # Value (Brightness)
+        
+        # 1. Identify candidate white/light pixels (potential scale or glare)
+        # Stricter saturation threshold to avoid colored areas
+        white_candidates = (s < 35) & (v > 90) & (lesion_mask > 0)
+        
+        # 2. Multi-scale texture analysis for roughness detection
+        # Laplacian for edge detection (high frequency texture)
         laplacian = cv2.Laplacian(gray, cv2.CV_64F)
-        laplacian = np.uint8(np.absolute(laplacian))
+        laplacian_abs = np.uint8(np.absolute(laplacian))
         
-        # "Roughness Mask": Pixels where edges are strong
-        rough_mask = laplacian > 20
+        # Variance-based texture (local roughness)
+        kernel_size = 5
+        blur = cv2.GaussianBlur(gray, (kernel_size, kernel_size), 0)
+        variance = cv2.absdiff(gray, blur)
         
-        # 3. COMBINE: It must be WHITE AND ROUGH
+        # Combine texture indicators: both edge detection and local variance
+        rough_mask = (laplacian_abs > 15) | (variance > 12)
+        
+        # 3. Scale pixels must be white AND have rough texture
         confirmed_scale_pixels = np.sum(white_candidates & rough_mask)
-        total_pixels = np.count_nonzero(lesion_mask) + 1e-5
+        total_lesion_pixels = np.count_nonzero(lesion_mask) + 1e-5
         
-        scale_ratio = confirmed_scale_pixels / total_pixels
+        scale_ratio = confirmed_scale_pixels / total_lesion_pixels
+        
+        # Also check average texture intensity in scale areas
+        if confirmed_scale_pixels > 0:
+            scale_texture_intensity = cv2.mean(laplacian_abs, 
+                                               mask=np.uint8(white_candidates & rough_mask))[0]
+        else:
+            scale_texture_intensity = 0
+        
+        # Start with AI baseline
         d_score = ai_base.item()
         
-        # Visual Veto: Scaling
-        if scale_ratio < 0.02: 
-            d_score = min(d_score, 1.0) # Force Mild/None
-        elif scale_ratio > 0.15: 
-            d_score += 1.0 # Heavy scale
-        elif scale_ratio > 0.05:
-            d_score += 0.5 # Moderate scale
+        # Visual veto and enhancement based on scale coverage and texture intensity
+        if scale_ratio < 0.015:
+            # Minimal to no visible scaling
+            d_score = min(d_score, 1.0)
+        elif scale_ratio < 0.035:
+            # Very light scaling
+            d_score = min(d_score, 1.5)
+            if scale_texture_intensity > 25:
+                d_score += 0.3  # Boost if texture is pronounced
+        elif scale_ratio < 0.08:
+            # Mild to moderate scaling
+            d_score = min(d_score, 2.5)
+            if scale_texture_intensity > 30:
+                d_score += 0.5
+        elif scale_ratio > 0.18:
+            # Heavy scaling coverage
+            d_score = max(d_score, 3.0)
+            if scale_texture_intensity > 35:
+                d_score += 0.8
+        elif scale_ratio > 0.08:
+            # Moderate scaling
+            d_score += 0.5
+            if scale_texture_intensity > 32:
+                d_score += 0.3
+        
+        # Ensure reasonable bounds
+        d_score = max(0.0, min(4.0, d_score))
 
         # --- C. Induration (Thickness) ---
+        # Induration is harder to measure from 2D images, but we can use:
+        # 1. Shadow/depth cues (darker borders, brightness variation)
+        # 2. Texture density (raised areas often have more pronounced texture)
+        # 3. Color intensity (thicker lesions often appear darker/more saturated)
+        
+        # Calculate brightness variation (std dev) - raised areas cast micro-shadows
+        lesion_pixels = gray[lesion_mask > 0]
+        if len(lesion_pixels) > 0:
+            brightness_std = np.std(lesion_pixels)
+        else:
+            brightness_std = 0
+        
+        # Check for darker borders (elevation indicator)
+        # Erode mask to get inner region, compare with border
+        kernel = np.ones((5,5), np.uint8)
+        inner_mask = cv2.erode(lesion_mask, kernel, iterations=1)
+        border_mask = cv2.subtract(lesion_mask, inner_mask)
+        
+        if np.count_nonzero(border_mask) > 0 and np.count_nonzero(inner_mask) > 0:
+            avg_border_brightness = cv2.mean(gray, mask=border_mask)[0]
+            avg_inner_brightness = cv2.mean(gray, mask=inner_mask)[0]
+            border_darkness = avg_inner_brightness - avg_border_brightness
+        else:
+            border_darkness = 0
+        
+        # Texture density within lesion
+        texture_density = cv2.mean(laplacian_abs, mask=lesion_mask)[0]
+        
+        # Color intensity (saturation + value)
+        lesion_saturation = cv2.mean(hsv[:, :, 1], mask=lesion_mask)[0]
+        lesion_brightness = cv2.mean(hsv[:, :, 2], mask=lesion_mask)[0]
+        color_intensity = (lesion_saturation / 255.0) * (lesion_brightness / 255.0)
+        
+        # Start with AI baseline
         i_score = ai_base.item()
-        if i_score > (e_score + 1.0): i_score = e_score + 1.0
+        
+        # Induration indicators analysis
+        induration_indicators = 0
+        
+        # High brightness variation suggests elevation/depth
+        if brightness_std > 25:
+            induration_indicators += 1
+            if brightness_std > 40:
+                i_score += 0.4
+        
+        # Darker borders suggest raised edges
+        if border_darkness > 8:
+            induration_indicators += 1
+            if border_darkness > 15:
+                i_score += 0.5
+        
+        # Dense texture suggests thickness
+        if texture_density > 18:
+            induration_indicators += 1
+            if texture_density > 28:
+                i_score += 0.3
+        
+        # High color intensity can indicate thickness
+        if color_intensity > 0.4:
+            if lesion_saturation > 100:
+                i_score += 0.2
+        
+        # Multi-indicator boost
+        if induration_indicators >= 3:
+            i_score += 0.5
+        elif induration_indicators >= 2:
+            i_score += 0.3
+        elif induration_indicators == 0:
+            # No clear thickness indicators - likely flat
+            i_score = min(i_score, 2.0)
+        
+        # Logical constraint: Induration shouldn't vastly exceed erythema
+        # (You can't have very thick lesions with no redness)
+        if i_score > (e_score + 1.2):
+            i_score = e_score + 1.2
+        
+        # Ensure reasonable bounds
+        i_score = max(1.0, min(4.0, i_score))
 
         # 3. FINAL SCORING
-        final_e = int(round(min(max(e_score, 1), 4))) # Floor 1
-        final_i = int(round(min(max(i_score, 1), 4))) # Floor 1
-        final_d = int(round(min(max(d_score, 0), 4))) # Floor 0 (Scale can be 0)
+        # Round to nearest 0.5 for more granular scoring, then convert to integers
+        final_e = max(1, min(4, int(round(e_score * 2) / 2)))  # Floor 1, range 1-4
+        final_i = max(1, min(4, int(round(i_score * 2) / 2)))  # Floor 1, range 1-4
+        final_d = max(0, min(4, int(round(d_score * 2) / 2)))  # Floor 0, range 0-4
         
+        # Global severity score (0-10 scale)
+        # Max possible: (4+4+4)/12 * 10 = 10.0
         global_0_10 = ((final_e + final_i + final_d) / 12.0) * 10.0
         
         return {
