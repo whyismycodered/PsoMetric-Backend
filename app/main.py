@@ -13,7 +13,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Psoriasis AI Backend",
-    version="1.0",
+    version="1.0", 
     lifespan=lifespan
 )
 
