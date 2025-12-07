@@ -7,3 +7,5 @@ ultralytics
 opencv-python-headless
 numpy
 pillow
+boto3
+python-dotenv

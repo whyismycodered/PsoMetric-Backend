@@ -13,6 +13,12 @@ class LesionDetail(BaseModel):
     induration: int         # Thickness
     desquamation: int       # Scaling
 
+# Database metadata
+class DatabaseMetadata(BaseModel):
+    analysis_id: str
+    timestamp: str
+    saved: bool
+
 # The Main Response Object
 class PsoriasisAnalysisResponse(BaseModel):
     diagnosis: str          # Global Diagnosis
@@ -20,3 +26,4 @@ class PsoriasisAnalysisResponse(BaseModel):
     lesions_found: int
     annotated_image_base64: Optional[str] = None # The "Heatmap" Image
     details: List[LesionDetail]
+    db_metadata: Optional[DatabaseMetadata] = None  # Database save info
