@@ -1,6 +1,8 @@
 from pydantic import BaseModel
 from typing import List, Optional
 
+# ==================== IMAGE ANALYSIS SCHEMAS ====================
+
 # Detail for a single lesion found in the image
 class LesionDetail(BaseModel):
     id: int
@@ -27,3 +29,65 @@ class PsoriasisAnalysisResponse(BaseModel):
     annotated_image_base64: Optional[str] = None # The "Heatmap" Image
     details: List[LesionDetail]
     db_metadata: Optional[DatabaseMetadata] = None  # Database save info
+
+
+# ==================== QUESTIONNAIRE SCHEMAS ====================
+
+class Screen1(BaseModel):
+    gender: str
+    age: str
+    psoriasisHistory: str
+    location: List[str]
+    appearance: List[str]
+    size: List[str]
+    nails: List[str]
+    scalp: List[str]
+
+class Screen2(BaseModel):
+    onsetDate: str
+    symptomPattern: str
+    lesionSpeed: str
+    itching: int
+    burning: int
+    pain: int
+    bleeding: int
+    worsenAtNight: str
+    worsenWithStress: str
+    triggers: List[str]
+    medTriggers: List[str]
+    sunlightEffect: str
+
+class Screen3(BaseModel):
+    dailyImpact: str
+    emotionalImpact: str
+    relationshipsImpact: str
+    jointPain: str
+    jointsAffected: List[str]
+    nailWithJoint: str
+    pastTreatments: str
+    familyHistory: List[str]
+    otherConditions: List[str]
+    currentTreatment: str
+    reliefSideEffects: str
+    triedSystemic: str
+    feverInfection: str
+    weightLossFatigue: str
+
+class QuestionnaireRequest(BaseModel):
+    timestamp: str
+    screen1: Screen1
+    screen2: Screen2
+    screen3: Screen3
+
+class QuestionnaireResponse(BaseModel):
+    assessment_id: str
+    timestamp: str
+    severity_assessment: str
+    psoriatic_arthritis_risk: str
+    nextSteps: List[str]
+    additionalNotes: str
+    treatment_urgency: str
+    recommended_followup_weeks: int
+    db_metadata: Optional[DatabaseMetadata] = None  # Database save info
+
+
