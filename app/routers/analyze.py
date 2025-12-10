@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Header
+from fastapi import APIRouter, UploadFile, File, HTTPException, Header, Query
 from app.services import ai_engine
 from app.schemas import PsoriasisAnalysisResponse, DatabaseMetadata
 from app.database import save_analysis_to_db, get_analysis_by_id, get_user_analyses
@@ -11,7 +11,8 @@ router = APIRouter()
 @router.post("/", response_model=PsoriasisAnalysisResponse)
 async def analyze_image_endpoint(
     file: UploadFile = File(...),
-    user_id: Optional[str] = Header(None, alias="X-User-ID")
+    x_user_id: Optional[str] = Header(None, alias="X-User-ID"),
+    query_user_id: Optional[str] = Query(None, alias="user_id")
 ):
     """
     Endpoint to upload image and get full medical analysis.
@@ -19,7 +20,14 @@ async def analyze_image_endpoint(
     
     Headers:
         X-User-ID (optional): User identifier for tracking analyses
+    Query Param:
+        user_id (optional): Fallback if header is missing
     """
+    # Prioritize Header, fallback to Query Param
+    user_id = x_user_id or query_user_id
+    
+    print(f"🔍 Received Image Analysis Request - User ID: {user_id}") # Debug Log
+
     if file.content_type not in ["image/jpeg", "image/png", "image/webp"]:
         raise HTTPException(status_code=400, detail="Invalid image format.")
 

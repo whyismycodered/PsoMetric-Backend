@@ -151,7 +151,7 @@ class AIEngine:
         
         if erythema_index < 8 or avg_a < 132 or (not is_red_hue and avg_saturation < 30):
             # Clear to very slight
-            e_score = min(e_score, 0.5) # Allow dropping to 0 range
+            e_score = min(e_score, 1.0)
         elif erythema_index < 20 or avg_a < 140:
             # Slight erythema
             e_score = min(e_score, 1.6)
@@ -178,7 +178,7 @@ class AIEngine:
             # Moderate range
             e_score += 0.3
         
-        return max(0.0, min(4.0, e_score))
+        return max(1.0, min(4.0, e_score))
     
     def _calculate_desquamation_score(self, gray_original, hsv_original, lesion_mask, ai_baseline):
         """
@@ -425,18 +425,14 @@ class AIEngine:
             i_score += 0.2
         elif thickness_indicators <= 1:
             # Low confidence - likely flat lesion
-            i_score = min(i_score, 0.5) # Allow dropping to 0 range
+            i_score = min(i_score, 1.6)
         
         # Clinical constraint: induration correlates with but shouldn't vastly exceed erythema
         # Rationale: Very thick plaques without inflammation are atypical
         if i_score > (erythema_score + 1.4):
             i_score = erythema_score + 1.4
         
-        # Shadow Safety Check: If erythema is very low (healthy skin), ignore shadows
-        if erythema_score < 1.0:
-            i_score = min(i_score, 0.5)
-
-        return max(0.0, min(4.0, i_score))
+        return max(1.0, min(4.0, i_score))
 
     def calculate_lesion_metrics(self, pil_crop, lesion_mask=None):
         """
@@ -528,8 +524,8 @@ class AIEngine:
         Convert float scores to final integer ratings and calculate global severity.
         """
         # Round to nearest 0.5 for more granular scoring
-        final_e = max(0, min(4, int(round(e_score * 2) / 2)))
-        final_i = max(0, min(4, int(round(i_score * 2) / 2)))
+        final_e = max(1, min(4, int(round(e_score * 2) / 2)))
+        final_i = max(1, min(4, int(round(i_score * 2) / 2)))
         final_d = max(0, min(4, int(round(d_score * 2) / 2)))
         
         # Global severity score (0-10 scale)
@@ -625,42 +621,14 @@ class AIEngine:
         annotated_numpy = result.plot() 
         b64_string = self.image_to_base64(annotated_numpy)
 
-        # --- 🛡️ FALLBACK: If Sniper misses, force Center Crop ---
+        # --- NO LESIONS DETECTED ---
         if not result.masks:
-            # Crop Center 75%
-            w, h = original_image.size
-            crop = original_image.crop((w*0.125, h*0.125, w*0.875, h*0.875))
-            
-            # Force Grade
-            metrics = self.calculate_lesion_metrics(crop, lesion_mask=None)
-            score = metrics["severity_score"]
-            
-            # If score is extremely low, accept Clear. Otherwise, report findings.
-            if score < 1.5:
-                return {
-                    "diagnosis": "Clear",
-                    "global_score": 0.0, 
-                    "lesions_found": 0, 
-                    "annotated_image_base64": b64_string, 
-                    "details": []
-                }
-            
-            # Return "Assumed" Lesion
-            local_diag = "Mild" if score < 4.0 else "Moderate" if score < 7.5 else "Severe"
             return {
-                "diagnosis": local_diag,
-                "global_score": score,
-                "lesions_found": 1, 
+                "diagnosis": "Clear",
+                "global_score": 0.0, 
+                "lesions_found": 0, 
                 "annotated_image_base64": b64_string, 
-                "details": [{
-                    "id": 1,
-                    "diagnosis": local_diag,
-                    "severity_score": score,
-                    "area_pixels": int((w*0.75)*(h*0.75)),
-                    "erythema": metrics["erythema"],
-                    "induration": metrics["induration"],
-                    "desquamation": metrics["desquamation"]
-                }]
+                "details": []
             }
 
         # --- STANDARD LOGIC ---

@@ -2,7 +2,7 @@
 Questionnaire Assessment Router
 Handles psoriasis assessment form submissions and generates personalized recommendations using LLM.
 """
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Header, Query
 from typing import Optional
 import uuid
 import os
@@ -152,7 +152,8 @@ Respond ONLY with valid JSON in this exact format:
 @router.post("/submit", response_model=QuestionnaireResponse)
 async def submit_questionnaire(
     request: QuestionnaireRequest,
-    x_user_id: Optional[str] = Header(None, alias="X-User-ID")
+    x_user_id: Optional[str] = Header(None, alias="X-User-ID"),
+    query_user_id: Optional[str] = Query(None, alias="user_id")
 ):
     """
     Submit psoriasis assessment questionnaire and receive personalized recommendations.
@@ -167,10 +168,16 @@ async def submit_questionnaire(
     Args:
         request: QuestionnaireRequest containing 3 screens of assessment data
         x_user_id: Optional user identifier from X-User-ID header
+        query_user_id: Optional user identifier from query parameter
     
     Returns:
         QuestionnaireResponse with severity, risk assessment, and recommendations
     """
+    # Prioritize Header, fallback to Query Param
+    user_id = x_user_id or query_user_id
+    
+    print(f"🔍 Received Request - User ID: {user_id}") # Debug Log
+
     try:
         # Generate unique assessment ID
         assessment_id = str(uuid.uuid4())
@@ -205,7 +212,7 @@ async def submit_questionnaire(
         db_metadata = save_questionnaire_to_db(
             assessment_data=assessment_data,
             assessment_id=assessment_id,
-            user_id=x_user_id,
+            user_id=user_id,
             timestamp=request.timestamp
         )
         
