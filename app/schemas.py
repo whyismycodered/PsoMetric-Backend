@@ -29,6 +29,7 @@ class PsoriasisAnalysisResponse(BaseModel):
     annotated_image_base64: Optional[str] = None # The "Heatmap" Image
     details: List[LesionDetail]
     db_metadata: Optional[DatabaseMetadata] = None  # Database save info
+    error: Optional[str] = None # Error message if validation fails
 
 
 # ==================== QUESTIONNAIRE SCHEMAS ====================

@@ -30,6 +30,11 @@ async def analyze_image_endpoint(
         # Run AI Engine
         result = ai_engine.analyze_image(image)
         
+        # Check for validation error
+        if result.get("error"):
+            print(f"❌ Image Validation Failed: {result['error']}")
+            raise HTTPException(status_code=400, detail=result["error"])
+        
         # Save to database
         db_result = save_analysis_to_db(
             analysis_result=result,

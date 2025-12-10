@@ -151,7 +151,7 @@ class AIEngine:
         
         if erythema_index < 8 or avg_a < 132 or (not is_red_hue and avg_saturation < 30):
             # Clear to very slight
-            e_score = min(e_score, 1.0)
+            e_score = min(e_score, 0.5) # Allow dropping to 0 range
         elif erythema_index < 20 or avg_a < 140:
             # Slight erythema
             e_score = min(e_score, 1.6)
@@ -178,7 +178,7 @@ class AIEngine:
             # Moderate range
             e_score += 0.3
         
-        return max(1.0, min(4.0, e_score))
+        return max(0.0, min(4.0, e_score))
     
     def _calculate_desquamation_score(self, gray_original, hsv_original, lesion_mask, ai_baseline):
         """
@@ -425,14 +425,18 @@ class AIEngine:
             i_score += 0.2
         elif thickness_indicators <= 1:
             # Low confidence - likely flat lesion
-            i_score = min(i_score, 1.6)
+            i_score = min(i_score, 0.5) # Allow dropping to 0 range
         
         # Clinical constraint: induration correlates with but shouldn't vastly exceed erythema
         # Rationale: Very thick plaques without inflammation are atypical
         if i_score > (erythema_score + 1.4):
             i_score = erythema_score + 1.4
         
-        return max(1.0, min(4.0, i_score))
+        # Shadow Safety Check: If erythema is very low (healthy skin), ignore shadows
+        if erythema_score < 1.0:
+            i_score = min(i_score, 0.5)
+
+        return max(0.0, min(4.0, i_score))
 
     def calculate_lesion_metrics(self, pil_crop, lesion_mask=None):
         """
@@ -524,8 +528,8 @@ class AIEngine:
         Convert float scores to final integer ratings and calculate global severity.
         """
         # Round to nearest 0.5 for more granular scoring
-        final_e = max(1, min(4, int(round(e_score * 2) / 2)))
-        final_i = max(1, min(4, int(round(i_score * 2) / 2)))
+        final_e = max(0, min(4, int(round(e_score * 2) / 2)))
+        final_i = max(0, min(4, int(round(i_score * 2) / 2)))
         final_d = max(0, min(4, int(round(d_score * 2) / 2)))
         
         # Global severity score (0-10 scale)
@@ -538,9 +542,80 @@ class AIEngine:
             "severity_score": round(global_0_10, 2)
         }
 
+    def validate_image_quality(self, cv_img):
+        """
+        Checks if image is valid for analysis:
+        1. Not too blurry (Laplacian variance)
+        2. Contains sufficient skin tones (HSV range)
+        """
+        # Resize for consistent blur check (max dim 640)
+        h, w = cv_img.shape[:2]
+        target_dim = 640
+        if max(h, w) > target_dim:
+            scale = target_dim / max(h, w)
+            check_img = cv2.resize(cv_img, (0,0), fx=scale, fy=scale)
+        else:
+            check_img = cv_img
+
+        # 1. Blur Check
+        gray = cv2.cvtColor(check_img, cv2.COLOR_BGR2GRAY)
+        blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
+        
+        # Threshold: < 60 is typically blurry
+        if blur_score < 60: 
+            return False, "Image is too blurry. Please ensure good lighting and focus."
+
+        # 2. Brightness Check
+        avg_brightness = np.mean(gray)
+        if avg_brightness < 40:
+            return False, "Image is too dark. Please ensure good lighting."
+        if avg_brightness > 240:
+            return False, "Image is too bright (overexposed). Please reduce lighting or glare."
+
+        # 3. Skin Detection (HSV)
+        hsv = cv2.cvtColor(check_img, cv2.COLOR_BGR2HSV)
+        
+        # Generic skin color range (covers pale to dark skin)
+        # H: 0-25 (Red/Orange/Yellow), S: 15-250, V: 60-255
+        lower_skin = np.array([0, 15, 60], dtype=np.uint8)
+        upper_skin = np.array([25, 255, 255], dtype=np.uint8)
+        
+        # Wrap-around Red (170-180)
+        lower_skin2 = np.array([170, 15, 60], dtype=np.uint8)
+        upper_skin2 = np.array([180, 255, 255], dtype=np.uint8)
+        
+        mask1 = cv2.inRange(hsv, lower_skin, upper_skin)
+        mask2 = cv2.inRange(hsv, lower_skin2, upper_skin2)
+        skin_mask = cv2.add(mask1, mask2)
+        
+        skin_pixels = cv2.countNonZero(skin_mask)
+        total_pixels = check_img.shape[0] * check_img.shape[1]
+        skin_ratio = skin_pixels / total_pixels
+        
+        # Require at least 15% skin-like pixels
+        if skin_ratio < 0.15:
+            return False, "No skin detected. Please ensure the image shows skin clearly."
+
+        return True, "OK"
+
     def analyze_image(self, original_image: Image.Image):
         """Main Pipeline: Detect -> Crop -> Grade -> Average"""
         original_image = ImageOps.exif_transpose(original_image)
+
+        # --- 0. VALIDATION ---
+        # Convert to OpenCV for validation
+        cv_img_full = cv2.cvtColor(np.array(original_image), cv2.COLOR_RGB2BGR)
+        is_valid, error_msg = self.validate_image_quality(cv_img_full)
+        
+        if not is_valid:
+            return {
+                "diagnosis": "Invalid",
+                "global_score": 0.0,
+                "lesions_found": 0,
+                "annotated_image_base64": None,
+                "details": [],
+                "error": error_msg
+            }
 
         # 1. Run Sniper (Low Threshold for Mild Cases)
         results = self.sniper(original_image, verbose=False, conf=0.10)
@@ -561,7 +636,7 @@ class AIEngine:
             score = metrics["severity_score"]
             
             # If score is extremely low, accept Clear. Otherwise, report findings.
-            if score < 0.5:
+            if score < 1.5:
                 return {
                     "diagnosis": "Clear",
                     "global_score": 0.0, 
