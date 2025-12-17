@@ -5,112 +5,139 @@ from datetime import datetime
 from decimal import Decimal
 import uuid
 
-# 1. Load the secret keys from .env
 load_dotenv()
 
+
 def get_dynamodb_table():
-    """
-    Creates a connection to the specific DynamoDB table.
-    """
+    """Get DynamoDB table connection."""
     try:
-        # 2. Connect to AWS
         dynamodb = boto3.resource(
             'dynamodb',
             region_name=os.getenv("AWS_REGION", "us-east-1"),
             aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
             aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY")
         )
-
-        # 3. Select the Table
-        table = dynamodb.Table('PsoMetricDB')
-        return table
-        
+        return dynamodb.Table('PsoMetricDB')
     except Exception as e:
         print(f"❌ AWS Connection Error: {e}")
         return None
 
-def convert_to_decimal(obj):
-    """
-    Recursively converts float values to Decimal for DynamoDB compatibility.
-    """
-    if isinstance(obj, float):
-        return Decimal(str(obj))
-    elif isinstance(obj, dict):
-        return {k: convert_to_decimal(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_to_decimal(item) for item in obj]
-    return obj
 
-def save_analysis_to_db(analysis_result: dict, user_id: str = None, image_filename: str = None):
+def convert_to_decimal(value):
+    """Convert floats to Decimal for DynamoDB."""
+    if isinstance(value, float):
+        return Decimal(str(value))
+    elif isinstance(value, dict):
+        return {k: convert_to_decimal(v) for k, v in value.items()}
+    elif isinstance(value, list):
+        return [convert_to_decimal(v) for v in value]
+    return value
+
+
+def save_assessment(
+    user_id: str,
+    ml_result: dict,
+    llm_result: dict,
+    questionnaire: dict
+) -> dict:
     """
-    Saves AI analysis results to DynamoDB.
+    Save ONE complete assessment record containing:
+    - ML analysis results (scores, diagnosis, annotated image)
+    - LLM-generated recommendations (next_steps, additional_notes)
+    - Questionnaire data (for history recall)
     
     Args:
-        analysis_result: The analysis result dictionary from AI engine
-        user_id: User identifier (required for DynamoDB key)
-        image_filename: Original filename of analyzed image
+        user_id: User identifier (partition key)
+        ml_result: ML model output (global_score, diagnosis, erythema, etc.)
+        llm_result: LLM output (next_steps, additional_notes)
+        questionnaire: Original questionnaire answers
     
     Returns:
-        dict: Saved record with analysis_id and created_at or None on failure
+        dict with assessment_id, created_at, saved status
     """
     table = get_dynamodb_table()
     if not table:
-        print("⚠️ Database not available, skipping save")
+        print("⚠️ Database not available")
         return None
     
-    # Require user_id since it's the partition key
-    if not user_id:
-        user_id = 'anonymous'
-    
     try:
-        # Generate unique analysis ID and timestamp
-        analysis_id = str(uuid.uuid4())
+        assessment_id = str(uuid.uuid4())
         created_at = datetime.utcnow().isoformat()
         
-        # Prepare record for DynamoDB
+        # Build the complete record
         record = {
-            'user_id': user_id,  # Partition key
-            'created_at': created_at,  # Sort key
-            'analysis_id': analysis_id,
-            'image_filename': image_filename or 'unknown',
+            # Primary keys
+            "user_id": user_id,
+            "created_at": created_at,
+            "assessment_id": assessment_id,
             
-            # Global results
-            'diagnosis': analysis_result.get('diagnosis'),
-            'global_score': convert_to_decimal(analysis_result.get('global_score')),
-            'lesions_found': analysis_result.get('lesions_found'),
+            # ML Analysis Results
+            "global_score": convert_to_decimal(ml_result.get("global_score", 0)),
+            "diagnosis": ml_result.get("diagnosis", "Unknown"),
+            "erythema": convert_to_decimal(ml_result.get("erythema", 0)),
+            "induration": convert_to_decimal(ml_result.get("induration", 0)),
+            "scaling": convert_to_decimal(ml_result.get("scaling", 0)),
+            "lesions_found": ml_result.get("lesions_found", 0),
+            "annotated_image_base64": ml_result.get("annotated_image_base64", ""),
             
-            # Lesion details (convert all floats to Decimal)
-            'lesion_details': convert_to_decimal(analysis_result.get('details', [])),
+            # LLM-Generated Recommendations
+            "next_steps": llm_result.get("next_steps", []),
+            "additional_notes": llm_result.get("additional_notes", ""),
             
-            # Metadata
-            'has_annotated_image': analysis_result.get('annotated_image_base64') is not None,
+            # Questionnaire Data (for history recall)
+            "questionnaire": convert_to_decimal({
+                "gender": questionnaire.get("gender"),
+                "age": questionnaire.get("age"),
+                "psoriasisHistory": questionnaire.get("psoriasisHistory"),
+                "location": questionnaire.get("location", []),
+                "appearance": questionnaire.get("appearance", []),
+                "size": questionnaire.get("size", []),
+                "itching": questionnaire.get("itching", 0),
+                "pain": questionnaire.get("pain", 0),
+                "jointPain": questionnaire.get("jointPain"),
+                "jointsAffected": questionnaire.get("jointsAffected", []),
+                "dailyImpact": questionnaire.get("dailyImpact"),
+                "currentTreatment": questionnaire.get("currentTreatment"),
+            })
         }
         
-        # Save to DynamoDB
         table.put_item(Item=record)
-        print(f"✅ Analysis saved to DB: {analysis_id} for user: {user_id}")
+        print(f"✅ Assessment saved: {assessment_id} for user: {user_id}")
         
         return {
-            'analysis_id': analysis_id,
-            'timestamp': created_at,
-            'saved': True
+            "assessment_id": assessment_id,
+            "created_at": created_at,
+            "saved": True
         }
         
     except Exception as e:
-        print(f"❌ Failed to save to database: {e}")
+        print(f"❌ Failed to save assessment: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
-def get_analysis_by_id(user_id: str, created_at: str):
-    """
-    Retrieves a specific analysis from the database using composite key.
+
+def get_user_history(user_id: str, limit: int = 50):
+    """Get all assessments for user."""
+    table = get_dynamodb_table()
+    if not table:
+        return []
     
-    Args:
-        user_id: The user identifier (partition key)
-        created_at: The creation timestamp (sort key)
-    
-    Returns:
-        dict: Analysis record or None if not found
-    """
+    try:
+        response = table.query(
+            KeyConditionExpression='user_id = :uid',
+            ExpressionAttributeValues={':uid': user_id},
+            ScanIndexForward=False,
+            Limit=limit
+        )
+        return response.get('Items', [])
+    except Exception as e:
+        print(f"❌ Query failed: {e}")
+        return []
+
+
+def get_assessment(user_id: str, created_at: str):
+    """Get specific assessment by composite key."""
     table = get_dynamodb_table()
     if not table:
         return None
@@ -122,7 +149,7 @@ def get_analysis_by_id(user_id: str, created_at: str):
         })
         return response.get('Item')
     except Exception as e:
-        print(f"❌ Failed to retrieve analysis: {e}")
+        print(f"❌ Failed to get assessment: {e}")
         return None
 
 def get_user_analyses(user_id: str, limit: int = 50):
