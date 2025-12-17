@@ -1,11 +1,10 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Header
+from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from app.services import ai_engine
 from app.database import save_assessment, get_user_history, get_assessment
 from app.llm_service import generate_recommendations
 from PIL import Image
 import io
 import json
-from typing import Optional
 
 router = APIRouter()
 
@@ -13,59 +12,84 @@ router = APIRouter()
 @router.post("/")
 async def analyze_image_endpoint(
     file: UploadFile = File(...),
-    user_id: Optional[str] = Header(None, alias="X-User-ID")
+    questionnaire_data: str = Form(...)
 ):
     """
-    Endpoint to upload image and get full medical analysis.
-    Results are automatically saved to the database.
+    Complete psoriasis analysis endpoint.
     
-    Headers:
-        X-User-ID (optional): User identifier for tracking analyses
+    Receives:
+    - file: Lesion image (JPEG/PNG/WebP)
+    - questionnaire_data: JSON string with questionnaire answers (includes userId)
+    
+    Flow:
+    1. Parse questionnaire from JSON string
+    2. Run ML analysis on image (Sniper + Judge)
+    3. Generate LLM recommendations using Gemini
+    4. Save ONE complete record to DynamoDB
+    5. Return unified response
     """
+    # Validate image format
     if file.content_type not in ["image/jpeg", "image/png", "image/webp"]:
         raise HTTPException(status_code=400, detail="Invalid image format. Use JPEG, PNG, or WebP.")
 
     try:
+        # Step 1: Parse questionnaire data
+        try:
+            questionnaire = json.loads(questionnaire_data)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid questionnaire_data JSON")
+        
+        # Extract user_id from questionnaire
+        user_id = questionnaire.get("userId")
+        if not user_id:
+            raise HTTPException(status_code=400, detail="userId is required in questionnaire_data")
+        
         # Read and prepare image
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert("RGB")
         
-        # 1. Parse questionnaire data
-        questionnaire = {}
-        if questionnaire_data:
-            try:
-                questionnaire = json.loads(questionnaire_data)
-            except json.JSONDecodeError:
-                print("⚠️ Failed to parse questionnaire_data JSON")
-        
-        # 2. Run ML Analysis
+        # Step 2: Run ML Analysis
         ml_result = ai_engine.analyze_image(image)
         
-        # Save to database
-        db_result = save_analysis_to_db(
-            analysis_result=result,
-            user_id=user_id,
-            image_filename=file.filename
-        )
+        if ml_result.get("error"):
+            raise HTTPException(status_code=400, detail=ml_result["error"])
         
-        # 5. Build unified response
-        # Extract metrics from details if available
+        # Extract individual scores from details (average across lesions)
         erythema = 0
         induration = 0
         scaling = 0
         
         if ml_result.get("details"):
-            # Average across all lesions
             details = ml_result["details"]
             if details:
                 erythema = round(sum(d.get("erythema", 0) for d in details) / len(details), 1)
                 induration = round(sum(d.get("induration", 0) for d in details) / len(details), 1)
                 scaling = round(sum(d.get("desquamation", 0) for d in details) / len(details), 1)
         
-        response = {
+        # Add extracted scores to ml_result for database storage
+        ml_result["erythema"] = erythema
+        ml_result["induration"] = induration
+        ml_result["scaling"] = scaling
+        
+        # Step 3: Generate LLM Recommendations
+        llm_result = generate_recommendations(ml_result, questionnaire)
+        
+        # Step 4: Save to DynamoDB (single record with everything)
+        db_result = save_assessment(
+            user_id=user_id,
+            ml_result=ml_result,
+            llm_result=llm_result,
+            questionnaire=questionnaire
+        )
+        
+        if not db_result:
+            print("⚠️ Failed to save to database, but continuing with response")
+        
+        # Step 5: Return complete response
+        return {
             # Assessment identifiers
-            "assessment_id": db_info["assessment_id"] if db_info else None,
-            "created_at": db_info["created_at"] if db_info else None,
+            "assessment_id": db_result["assessment_id"] if db_result else None,
+            "created_at": db_result["created_at"] if db_result else None,
             
             # ML Analysis Results
             "global_score": ml_result.get("global_score", 0),
@@ -78,13 +102,8 @@ async def analyze_image_endpoint(
             
             # LLM-Generated Recommendations
             "next_steps": llm_result.get("next_steps", []),
-            "additional_notes": llm_result.get("additional_notes", ""),
-            
-            # Optional: detailed lesion data
-            "details": ml_result.get("details", [])
+            "additional_notes": llm_result.get("additional_notes", "")
         }
-        
-        return response
 
     except HTTPException:
         raise
