@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Header, Query, Form
+from fastapi import APIRouter, UploadFile, File, HTTPException, Header
 from app.services import ai_engine
 from app.database import save_assessment, get_user_history, get_assessment
 from app.llm_service import generate_recommendations
@@ -13,28 +13,15 @@ router = APIRouter()
 @router.post("/")
 async def analyze_image_endpoint(
     file: UploadFile = File(...),
-    questionnaire_data: Optional[str] = Form(None),
-    x_user_id: Optional[str] = Header(None, alias="X-User-ID"),
-    user_id_query: Optional[str] = Query(None, alias="user_id")
+    user_id: Optional[str] = Header(None, alias="X-User-ID")
 ):
     """
-    Complete psoriasis analysis endpoint.
+    Endpoint to upload image and get full medical analysis.
+    Results are automatically saved to the database.
     
-    Receives:
-    - file: Lesion image (JPEG/PNG/WebP)
-    - questionnaire_data: JSON string with questionnaire answers
-    - X-User-ID header or user_id query param for database tracking
-    
-    Flow:
-    1. Parse questionnaire from JSON string
-    2. Run ML analysis on image (Sniper + Judge)
-    3. Generate LLM recommendations using Gemini
-    4. Save ONE complete record to DynamoDB
-    5. Return unified response
+    Headers:
+        X-User-ID (optional): User identifier for tracking analyses
     """
-    user_id = x_user_id or user_id_query
-    
-    # Validate image format
     if file.content_type not in ["image/jpeg", "image/png", "image/webp"]:
         raise HTTPException(status_code=400, detail="Invalid image format. Use JPEG, PNG, or WebP.")
 
@@ -54,21 +41,12 @@ async def analyze_image_endpoint(
         # 2. Run ML Analysis
         ml_result = ai_engine.analyze_image(image)
         
-        if ml_result.get("error"):
-            raise HTTPException(status_code=400, detail=ml_result["error"])
-        
-        # 3. Generate LLM Recommendations
-        llm_result = generate_recommendations(ml_result, questionnaire)
-        
-        # 4. Save to database (if user_id provided)
-        db_info = None
-        if user_id:
-            db_info = save_assessment(
-                user_id=user_id,
-                ml_result=ml_result,
-                llm_result=llm_result,
-                questionnaire=questionnaire
-            )
+        # Save to database
+        db_result = save_analysis_to_db(
+            analysis_result=result,
+            user_id=user_id,
+            image_filename=file.filename
+        )
         
         # 5. Build unified response
         # Extract metrics from details if available

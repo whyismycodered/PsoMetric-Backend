@@ -178,3 +178,136 @@ def get_user_analyses(user_id: str, limit: int = 50):
     except Exception as e:
         print(f"❌ Failed to query user analyses: {e}")
         return []
+
+# ==================== QUESTIONNAIRE DATABASE FUNCTIONS ====================
+
+def save_questionnaire_to_db(assessment_data: dict, assessment_id: str, user_id: str = None, timestamp: str = None):
+    """
+    Saves questionnaire assessment results to DynamoDB.
+    
+    Args:
+        assessment_data: The assessment data including questionnaire, severity, recommendations
+        assessment_id: Unique identifier for this assessment
+        user_id: User identifier (required for DynamoDB key)
+        timestamp: ISO timestamp from the request
+    
+    Returns:
+        dict: Database metadata with assessment_id, timestamp, saved status or None on failure
+    """
+    table = get_dynamodb_table()
+    if not table:
+        print("⚠️ Database not available, skipping questionnaire save")
+        return None
+    
+    # Default values
+    if not user_id:
+        user_id = 'anonymous'
+    
+    if not timestamp:
+        timestamp = datetime.utcnow().isoformat()
+    
+    try:
+        # Prepare record for DynamoDB
+        record = {
+            'user_id': user_id,  # Partition key
+            'created_at': timestamp,  # Sort key
+            'assessment_id': assessment_id,
+            'assessment_type': 'questionnaire',  # Distinguish from image analysis
+            
+            # Patient demographics
+            'gender': assessment_data['questionnaire_data']['screen1']['gender'],
+            'age': assessment_data['questionnaire_data']['screen1']['age'],
+            
+            # Assessment results
+            'severity': assessment_data['severity'],
+            'psa_risk': assessment_data['psa_risk'],
+            'urgency': assessment_data['urgency'],
+            'followup_weeks': assessment_data['followup_weeks'],
+            
+            # Clinical data
+            'recommendations': assessment_data['recommendations'],
+            'clinical_notes': assessment_data['clinical_notes'],
+            
+            # Full questionnaire data (for detailed analysis)
+            'questionnaire_data': convert_to_decimal(assessment_data['questionnaire_data']),
+        }
+        
+        # Save to DynamoDB
+        table.put_item(Item=record)
+        print(f"✅ Questionnaire assessment saved to DB: {assessment_id} for user: {user_id}")
+        
+        return {
+            'analysis_id': assessment_id,
+            'timestamp': timestamp,
+            'saved': True
+        }
+        
+    except Exception as e:
+        print(f"❌ Failed to save questionnaire to database: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def get_user_assessments(user_id: str, limit: int = 50):
+    """
+    Retrieves all assessments (both image and questionnaire) for a specific user.
+    
+    Args:
+        user_id: The user identifier
+        limit: Maximum number of records to return
+    
+    Returns:
+        list: List of assessment records ordered by most recent
+    """
+    table = get_dynamodb_table()
+    if not table:
+        return []
+    
+    try:
+        response = table.query(
+            KeyConditionExpression='user_id = :uid',
+            ExpressionAttributeValues={':uid': user_id},
+            ScanIndexForward=False,  # Most recent first
+            Limit=limit
+        )
+        
+        # Return simplified view for history
+        items = response.get('Items', [])
+        return [{
+            'assessment_id': item.get('assessment_id'),
+            'created_at': item.get('created_at'),
+            'assessment_type': item.get('assessment_type', 'image_analysis'),
+            'severity': item.get('severity') or item.get('diagnosis'),
+            'urgency': item.get('urgency', 'medium'),
+        } for item in items]
+        
+    except Exception as e:
+        print(f"❌ Failed to query user assessments: {e}")
+        return []
+
+
+def get_assessment_by_timestamp(user_id: str, timestamp: str):
+    """
+    Retrieves a specific assessment by user_id and timestamp (composite key).
+    
+    Args:
+        user_id: The user identifier (partition key)
+        timestamp: The creation timestamp (sort key)
+    
+    Returns:
+        dict: Assessment record or None if not found
+    """
+    table = get_dynamodb_table()
+    if not table:
+        return None
+    
+    try:
+        response = table.get_item(Key={
+            'user_id': user_id,
+            'created_at': timestamp
+        })
+        return response.get('Item')
+    except Exception as e:
+        print(f"❌ Failed to retrieve assessment: {e}")
+        return None

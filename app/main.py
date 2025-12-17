@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from app.services import ai_engine
-from app.routers import analyze
+from app.routers import analyze, questionnaire
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -26,9 +26,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register Router
-app.include_router(analyze.router, prefix="/analyze", tags=["Analysis"])
+# Register Routers
+app.include_router(analyze.router, prefix="/analyze", tags=["Image Analysis"])
+app.include_router(questionnaire.router, prefix="/questionnaire", tags=["Questionnaire Assessment"])
 
 @app.get("/")
 def root():
-    return {"status": "Online", "message": "Psoriasis AI Backend Running"}
+    return {
+        "status": "Online", 
+        "message": "Psoriasis AI Backend Running",
+        "endpoints": {
+            "image_analysis": "/analyze",
+            "questionnaire": "/questionnaire/submit"
+        }
+    }
