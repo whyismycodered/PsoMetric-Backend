@@ -4,11 +4,17 @@ LLM Service for generating psoriasis recommendations using Google Gemini.
 import os
 import google.generativeai as genai
 from dotenv import load_dotenv
+import traceback
 
 load_dotenv()
 
 # Configure Gemini API
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    print(f"✅ Gemini API configured (key: {GEMINI_API_KEY[:10]}...)")
+else:
+    print("⚠️ WARNING: GEMINI_API_KEY not found in environment variables!")
 
 
 def generate_recommendations(ml_result: dict, questionnaire: dict) -> dict:
@@ -22,19 +28,27 @@ def generate_recommendations(ml_result: dict, questionnaire: dict) -> dict:
     Returns:
         dict with 'next_steps' (list of strings) and 'additional_notes' (string)
     """
+    # Check if API key is configured
+    if not GEMINI_API_KEY:
+        print("❌ LLM Error: GEMINI_API_KEY not configured")
+        return _get_fallback_recommendations(ml_result)
+    
     try:
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        model = genai.GenerativeModel("gemini-1.5-flash")
         
         # Build the prompt with context
         prompt = _build_prompt(ml_result, questionnaire)
         
+        print(f"🤖 Calling Gemini API...")
         response = model.generate_content(prompt)
+        print(f"✅ Gemini response received")
         
         # Parse the response
         return _parse_response(response.text)
         
     except Exception as e:
-        print(f"⚠️ LLM generation failed: {e}")
+        print(f"❌ LLM generation failed: {type(e).__name__}: {e}")
+        traceback.print_exc()
         # Return fallback recommendations
         return _get_fallback_recommendations(ml_result)
 
