@@ -23,7 +23,7 @@ def generate_recommendations(ml_result: dict, questionnaire: dict) -> dict:
         dict with 'next_steps' (list of strings) and 'additional_notes' (string)
     """
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash")
         
         # Build the prompt with context
         prompt = _build_prompt(ml_result, questionnaire)
@@ -54,6 +54,8 @@ def _build_prompt(ml_result: dict, questionnaire: dict) -> str:
     gender = questionnaire.get("gender", "Unknown")
     psoriasis_history = questionnaire.get("psoriasisHistory", "Unknown")
     locations = questionnaire.get("location", [])
+    appearance = questionnaire.get("appearance", [])
+    size = questionnaire.get("size", [])
     itching = questionnaire.get("itching", 0)
     pain = questionnaire.get("pain", 0)
     joint_pain = questionnaire.get("jointPain", "No")
@@ -76,6 +78,8 @@ def _build_prompt(ml_result: dict, questionnaire: dict) -> str:
 - Gender: {gender}
 - Psoriasis history: {psoriasis_history}
 - Affected body locations: {', '.join(locations) if locations else 'Not specified'}
+- Lesion appearance: {', '.join(appearance) if appearance else 'Not specified'}
+- Lesion size: {', '.join(size) if size else 'Not specified'}
 - Itching level: {itching}/10
 - Pain level: {pain}/10
 - Joint pain: {joint_pain}

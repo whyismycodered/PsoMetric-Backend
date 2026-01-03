@@ -28,41 +28,21 @@ def generate_llm_assessment(data: QuestionnaireRequest) -> dict:
     """
     # Format questionnaire data for LLM
     patient_summary = f"""Patient Profile:
-- Gender: {data.screen1.gender}, Age: {data.screen1.age}
-- History: {data.screen1.psoriasisHistory}
-- Affected areas: {', '.join(data.screen1.location)}
-- Appearance: {', '.join(data.screen1.appearance)}
-- Lesion size: {', '.join(data.screen1.size)}
-- Nail changes: {', '.join(data.screen1.nails) if data.screen1.nails else 'None'}
-- Scalp symptoms: {', '.join(data.screen1.scalp) if data.screen1.scalp else 'None'}
+- Gender: {data.gender}, Age: {data.age}
+- History: {data.psoriasisHistory}
+- Affected areas: {', '.join(data.location) if data.location else 'None'}
+- Appearance: {', '.join(data.appearance) if data.appearance else 'None'}
+- Lesion size: {', '.join(data.size) if data.size else 'None'}
 
-Symptom Details:
-- Onset: {data.screen2.onsetDate}
-- Pattern: {data.screen2.symptomPattern}
-- Itching severity: {data.screen2.itching}/10
-- Burning: {data.screen2.burning}/10
-- Pain: {data.screen2.pain}/10
-- Bleeding: {data.screen2.bleeding}/10
-- Worsens at night: {data.screen2.worsenAtNight}
-- Worsens with stress: {data.screen2.worsenWithStress}
-- Triggers: {', '.join(data.screen2.triggers)}
-- Medical triggers: {', '.join(data.screen2.medTriggers) if data.screen2.medTriggers else 'None'}
-- Sunlight effect: {data.screen2.sunlightEffect}
+Symptom Severity:
+- Itching severity: {data.itching}/10
+- Pain: {data.pain}/10
 
 Clinical Assessment:
-- Daily impact: {data.screen3.dailyImpact}
-- Emotional impact: {data.screen3.emotionalImpact}
-- Joint pain: {data.screen3.jointPain}
-- Joints affected: {', '.join(data.screen3.jointsAffected) if data.screen3.jointsAffected else 'None'}
-- Nail changes with joint pain: {data.screen3.nailWithJoint}
-- Past treatments: {data.screen3.pastTreatments}
-- Current treatment: {data.screen3.currentTreatment}
-- Treatment effectiveness: {data.screen3.reliefSideEffects}
-- Family history: {', '.join(data.screen3.familyHistory)}
-- Other conditions: {', '.join(data.screen3.otherConditions) if data.screen3.otherConditions else 'None'}
-- Tried systemic therapy: {data.screen3.triedSystemic}
-- Fever/infection: {data.screen3.feverInfection}
-- Weight loss/fatigue: {data.screen3.weightLossFatigue}
+- Daily impact: {data.dailyImpact}
+- Joint pain: {data.jointPain}
+- Joints affected: {', '.join(data.jointsAffected) if data.jointsAffected else 'None'}
+- Current treatment: {data.currentTreatment}
 """
 
     prompt = f"""You are a dermatology AI assistant. Analyze this psoriasis questionnaire data.
@@ -124,13 +104,13 @@ Respond ONLY with valid JSON in this exact format:
         print(f"⚠️ LLM assessment failed, using fallback: {e}")
         # Fallback to simple rule-based assessment
         severity = "moderate"
-        if len(data.screen1.location) >= 5:
+        if data.location and len(data.location) >= 5:
             severity = "severe"
-        elif len(data.screen1.location) <= 2 and data.screen2.itching < 5:
+        elif data.location and len(data.location) <= 2 and data.itching < 5:
             severity = "mild"
         
-        psa_risk = "medium" if data.screen3.jointPain == "yes" else "low"
-        if data.screen3.jointPain == "yes" and data.screen3.nailWithJoint == "yes":
+        psa_risk = "medium" if data.jointPain == "yes" else "low"
+        if data.jointPain == "yes" and data.jointsAffected and len(data.jointsAffected) > 0:
             psa_risk = "high"
         
         return {
@@ -191,7 +171,7 @@ async def submit_questionnaire(
         # Log assessment for monitoring
         print(f"\n{'='*60}")
         print(f"📋 New Questionnaire Assessment: {assessment_id}")
-        print(f"👤 Patient: {request.screen1.gender}, Age {request.screen1.age}")
+        print(f"👤 Patient: {request.gender}, Age {request.age}")
         print(f"📊 Severity: {severity.upper()}, PSA Risk: {psa_risk.upper()}")
         print(f"⏰ Urgency: {ai_recommendations['urgency'].upper()}")
         print(f"📅 Follow-up: {ai_recommendations['followup_weeks']} weeks")

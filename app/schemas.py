@@ -34,51 +34,28 @@ class PsoriasisAnalysisResponse(BaseModel):
 
 # ==================== QUESTIONNAIRE SCHEMAS ====================
 
-class Screen1(BaseModel):
+class QuestionnaireRequest(BaseModel):
+    # Basic Info
     gender: str
     age: str
     psoriasisHistory: str
+    
+    # Symptoms
     location: List[str]
     appearance: List[str]
     size: List[str]
-    nails: List[str]
-    scalp: List[str]
-
-class Screen2(BaseModel):
-    onsetDate: str
-    symptomPattern: str
-    lesionSpeed: str
+    
+    # Severity (0-10 scale)
     itching: int
-    burning: int
     pain: int
-    bleeding: int
-    worsenAtNight: str
-    worsenWithStress: str
-    triggers: List[str]
-    medTriggers: List[str]
-    sunlightEffect: str
-
-class Screen3(BaseModel):
+    
+    # Impact & Joints
     dailyImpact: str
-    emotionalImpact: str
-    relationshipsImpact: str
     jointPain: str
     jointsAffected: List[str]
-    nailWithJoint: str
-    pastTreatments: str
-    familyHistory: List[str]
-    otherConditions: List[str]
+    
+    # Treatment
     currentTreatment: str
-    reliefSideEffects: str
-    triedSystemic: str
-    feverInfection: str
-    weightLossFatigue: str
-
-class QuestionnaireRequest(BaseModel):
-    timestamp: str
-    screen1: Screen1
-    screen2: Screen2
-    screen3: Screen3
 
 class QuestionnaireResponse(BaseModel):
     assessment_id: str
