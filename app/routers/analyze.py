@@ -98,7 +98,7 @@ async def analyze_image_endpoint(
             "induration": induration,
             "scaling": scaling,
             "lesions_found": ml_result.get("lesions_found", 0),
-            "annotated_image_base64": ml_result.get("annotated_image_base64", ""),
+            "annotated_image_url": ml_result.get("annotated_image_url", ""),
             
             # LLM-Generated Recommendations
             "next_steps": llm_result.get("next_steps", []),

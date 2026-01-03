@@ -6,12 +6,28 @@ from PIL import Image, ImageOps
 import numpy as np
 import cv2
 import os
-import base64
 import io
+import uuid
+from datetime import datetime
+import boto3
+from botocore.exceptions import ClientError
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # --- CONFIGURATION ---
 SNIPER_PATH = "models/sniper.pt"
 JUDGE_PATH = "models/judge.pth"
+
+# --- S3 CONFIGURATION ---
+s3_client = boto3.client(
+    's3',
+    aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+    aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+    region_name=os.getenv('AWS_REGION')
+)
+S3_BUCKET = os.getenv('S3_BUCKET_NAME')
+AWS_REGION = os.getenv('AWS_REGION')
 
 class AIEngine:
     def __init__(self):
@@ -49,14 +65,39 @@ class AIEngine:
         except Exception as e:
             print(f"❌ Error loading Judge: {e}")
 
-    def image_to_base64(self, numpy_image):
-        """Converts a numpy/OpenCV image to a Base64 string."""
-        rgb_img = cv2.cvtColor(numpy_image, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(rgb_img)
-        buffer = io.BytesIO()
-        pil_img.save(buffer, format="JPEG", quality=70) 
-        buffer.seek(0)
-        return base64.b64encode(buffer.getvalue()).decode('utf-8')
+    def upload_image_to_s3(self, numpy_image):
+        """Uploads annotated image to S3 and returns the URL."""
+        try:
+            # Convert BGR to RGB
+            rgb_img = cv2.cvtColor(numpy_image, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(rgb_img)
+            
+            # Save to buffer as JPEG
+            buffer = io.BytesIO()
+            pil_img.save(buffer, format="JPEG", quality=70)
+            buffer.seek(0)
+            
+            # Generate unique filename
+            timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+            image_id = str(uuid.uuid4())[:8]
+            s3_key = f"annotated_images/{timestamp}_{image_id}.jpg"
+            
+            # Upload to S3
+            s3_client.upload_fileobj(
+                buffer,
+                S3_BUCKET,
+                s3_key,
+                ExtraArgs={'ContentType': 'image/jpeg'}
+            )
+            
+            # Return public URL
+            url = f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{s3_key}"
+            print(f"✅ Image uploaded to S3: {s3_key}")
+            return url
+            
+        except ClientError as e:
+            print(f"❌ S3 upload failed: {e}")
+            return None
 
     def white_balance(self, cv_img):
         """
@@ -608,7 +649,7 @@ class AIEngine:
                 "diagnosis": "Invalid",
                 "global_score": 0.0,
                 "lesions_found": 0,
-                "annotated_image_base64": None,
+                "annotated_image_url": None,
                 "details": [],
                 "error": error_msg
             }
@@ -617,9 +658,9 @@ class AIEngine:
         results = self.sniper(original_image, verbose=False, conf=0.10)
         result = results[0]
         
-        # Visualization
+        # Visualization - Upload to S3
         annotated_numpy = result.plot() 
-        b64_string = self.image_to_base64(annotated_numpy)
+        s3_url = self.upload_image_to_s3(annotated_numpy)
 
         # --- NO LESIONS DETECTED ---
         if not result.masks:
@@ -627,7 +668,7 @@ class AIEngine:
                 "diagnosis": "Clear",
                 "global_score": 0.0, 
                 "lesions_found": 0, 
-                "annotated_image_base64": b64_string, 
+                "annotated_image_url": s3_url, 
                 "details": []
             }
 
@@ -693,7 +734,7 @@ class AIEngine:
             "diagnosis": status,
             "global_score": round(global_score, 2),
             "lesions_found": len(lesions_data),
-            "annotated_image_base64": b64_string,
+            "annotated_image_url": s3_url,
             "details": lesions_data
         }
 

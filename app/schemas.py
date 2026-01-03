@@ -26,7 +26,7 @@ class PsoriasisAnalysisResponse(BaseModel):
     diagnosis: str          # Global Diagnosis
     global_score: float     # Weighted Average 0-10
     lesions_found: int
-    annotated_image_base64: Optional[str] = None # The "Heatmap" Image
+    annotated_image_url: Optional[str] = None  # S3 URL for annotated image
     details: List[LesionDetail]
     db_metadata: Optional[DatabaseMetadata] = None  # Database save info
     error: Optional[str] = None # Error message if validation fails
