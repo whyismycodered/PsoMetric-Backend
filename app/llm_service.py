@@ -34,7 +34,7 @@ def generate_recommendations(ml_result: dict, questionnaire: dict) -> dict:
         return _get_fallback_recommendations(ml_result)
     
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash-exp")
         
         # Build the prompt with context
         prompt = _build_prompt(ml_result, questionnaire)
