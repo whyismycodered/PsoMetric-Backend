@@ -1,8 +1,7 @@
 fastapi
-uvicorn
+uvicorn[standard]
 python-multipart
-torch
-torchvision
+# torch and torchvision installed separately in Dockerfile (CPU-only)
 ultralytics
 opencv-python-headless
 numpy
@@ -10,3 +9,4 @@ pillow
 boto3
 python-dotenv
 google-generativeai
+pydantic

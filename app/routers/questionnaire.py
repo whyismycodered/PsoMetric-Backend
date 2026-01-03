@@ -7,6 +7,7 @@ from typing import Optional
 import uuid
 import os
 import json
+from datetime import datetime
 import google.generativeai as genai
 
 from app.schemas import QuestionnaireRequest, QuestionnaireResponse
@@ -162,6 +163,9 @@ async def submit_questionnaire(
         # Generate unique assessment ID
         assessment_id = str(uuid.uuid4())
         
+        # Use provided timestamp or generate one
+        timestamp = request.timestamp or datetime.utcnow().isoformat()
+        
         # Use Gemini LLM to generate assessment and recommendations
         ai_recommendations = generate_llm_assessment(request)
         
@@ -193,13 +197,13 @@ async def submit_questionnaire(
             assessment_data=assessment_data,
             assessment_id=assessment_id,
             user_id=user_id,
-            timestamp=request.timestamp
+            timestamp=timestamp
         )
         
         # Return response
         return QuestionnaireResponse(
             assessment_id=assessment_id,
-            timestamp=request.timestamp,
+            timestamp=timestamp,
             severity_assessment=severity,
             psoriatic_arthritis_risk=psa_risk,
             nextSteps=ai_recommendations["nextSteps"],

@@ -40,3 +40,8 @@ def root():
             "questionnaire": "/questionnaire/submit"
         }
     }
+
+@app.get("/health")
+def health_check():
+    """Health check endpoint for Docker/load balancer."""
+    return {"status": "healthy"}

@@ -56,6 +56,9 @@ class QuestionnaireRequest(BaseModel):
     
     # Treatment
     currentTreatment: str
+    
+    # Metadata
+    timestamp: Optional[str] = None
 
 class QuestionnaireResponse(BaseModel):
     assessment_id: str

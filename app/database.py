@@ -78,7 +78,7 @@ def save_assessment(
             "induration": convert_to_decimal(ml_result.get("induration", 0)),
             "scaling": convert_to_decimal(ml_result.get("scaling", 0)),
             "lesions_found": ml_result.get("lesions_found", 0),
-            "annotated_image_base64": ml_result.get("annotated_image_base64", ""),
+            "annotated_image_url": ml_result.get("annotated_image_url", ""),
             
             # LLM-Generated Recommendations
             "next_steps": llm_result.get("next_steps", []),
@@ -207,7 +207,9 @@ def save_questionnaire_to_db(assessment_data: dict, assessment_id: str, user_id:
         timestamp = datetime.utcnow().isoformat()
     
     try:
-        # Prepare record for DynamoDB
+        # Prepare record for DynamoDB - using flat questionnaire structure
+        questionnaire_data = assessment_data.get('questionnaire_data', {})
+        
         record = {
             'user_id': user_id,  # Partition key
             'created_at': timestamp,  # Sort key
@@ -215,8 +217,8 @@ def save_questionnaire_to_db(assessment_data: dict, assessment_id: str, user_id:
             'assessment_type': 'questionnaire',  # Distinguish from image analysis
             
             # Patient demographics
-            'gender': assessment_data['questionnaire_data']['screen1']['gender'],
-            'age': assessment_data['questionnaire_data']['screen1']['age'],
+            'gender': questionnaire_data.get('gender'),
+            'age': questionnaire_data.get('age'),
             
             # Assessment results
             'severity': assessment_data['severity'],
@@ -229,7 +231,7 @@ def save_questionnaire_to_db(assessment_data: dict, assessment_id: str, user_id:
             'clinical_notes': assessment_data['clinical_notes'],
             
             # Full questionnaire data (for detailed analysis)
-            'questionnaire_data': convert_to_decimal(assessment_data['questionnaire_data']),
+            'questionnaire_data': convert_to_decimal(questionnaire_data),
         }
         
         # Save to DynamoDB
