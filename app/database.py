@@ -7,7 +7,7 @@ import uuid
 
 load_dotenv()
 
-
+#comment#
 def get_dynamodb_table():
     """Get DynamoDB table connection."""
     try:
